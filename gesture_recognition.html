@@ -1,0 +1,178 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Digital Communication Interface</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link
+        href="https://fonts.googleapis.com/css2?family=Inter:ital,opsz,wght@0,14..32,100..900;1,14..32,100..900&display=swap"
+        rel="stylesheet">
+    <link rel="stylesheet" href="styles.css">
+</head>
+
+<body>
+    <div class="entry-popup" id="entryPopup">
+        <div class="entry-content">
+            <h1>Digital Comm - Farete</h1>
+            <button class="entry-button" onclick="startApp()">Start Experience</button>
+        </div>
+    </div>
+
+    <div class="video-container">
+        <video id="mainVideo" muted></video>
+        <div class="transition-overlay" id="transitionOverlay"></div>
+    </div>
+
+    <script>
+        let ws = null;
+        let currentSession = null;
+        let introPlayed = false;
+        let isTransitioning = false;
+        let lastGesture = null;
+        let lastGestureTime = 0;
+        let gestureDebounce = 3000;
+        let isPlayingGesture = false;
+
+        const videos = {
+            standby: '/videos/IDLE_FINAL.mp4',
+            intro: '/videos/LONG INTRO_FINAL.mp4',
+            thumbs_up: '/videos/THUMBS_UP_FINAL.mp4',
+            peace_sign: '/videos/PEACE_FINAL.mp4',
+            middle_finger: '/videos/SHOCK_FINAL.mp4',
+            fist_bump: '/videos/FISTBUMP_FINAL.mp4',
+            heart: '/videos/HEART_FINAL.mp4',
+            flex: '/videos/FLEX_FINAL.mp4',
+            selfie: '/videos/SELFIE_FINAL.mp4',
+        };
+
+        const gestureMapping = {
+            'thumbs up': 'thumbs_up',
+            'peace sign': 'peace_sign',
+            'middle finger': 'middle_finger',
+            'heavy metal': 'heavy_metal',
+            'our sign': 'our_sign'
+        };
+
+        const video = document.getElementById('mainVideo');
+        const overlay = document.getElementById('transitionOverlay');
+
+        function startApp() {
+            document.getElementById('entryPopup').style.display = 'none';
+            connectWebSocket();
+            playVideo('standby', true, false);
+        }
+
+        function connectWebSocket() {
+            ws = new WebSocket('ws://localhost:8765');
+
+            ws.onopen = () => {
+            };
+
+            ws.onclose = () => {
+                setTimeout(connectWebSocket, 2000);
+            };
+
+            ws.onmessage = (event) => {
+                const data = JSON.parse(event.data);
+                handleDetectionData(data);
+            };
+        }
+
+        function handleDetectionData(data) {
+            if (isTransitioning || isPlayingGesture) return;
+
+            const personPresent = data.person_count > 0;
+            const gesture = data.gesture;
+            const currentTime = Date.now();
+
+            if (personPresent && !currentSession) {
+                startSession();
+            } else if (!personPresent && currentSession) {
+                endSession();
+            } else if (currentSession && introPlayed && gesture && gesture !== 'unknown') {
+                const normalizedGesture = normalizeGesture(gesture);
+                if (normalizedGesture && videos[normalizedGesture]) {
+                    if (normalizedGesture !== lastGesture || (currentTime - lastGestureTime) > gestureDebounce) {
+                        lastGesture = normalizedGesture;
+                        lastGestureTime = currentTime;
+                        playGestureVideo(normalizedGesture);
+                    }
+                }
+            }
+        }
+
+        function normalizeGesture(gesture) {
+            const cleanGesture = gesture.replace(/^[^\w\s]+\s*/, '').toLowerCase().trim();
+            return gestureMapping[cleanGesture] || null;
+        }
+
+        function startSession() {
+            currentSession = Date.now();
+            introPlayed = false;
+            playVideo('intro', false, true, () => {
+                introPlayed = true;
+                playVideo('standby', true, false);
+            });
+        }
+
+        function endSession() {
+            currentSession = null;
+            introPlayed = false;
+            lastGesture = null;
+            lastGestureTime = 0;
+            isPlayingGesture = false;
+            playVideo('standby', true, false);
+        }
+
+        function playGestureVideo(gesture) {
+            isPlayingGesture = true;
+            playVideo(gesture, false, true, () => {
+                setTimeout(() => {
+                    isPlayingGesture = false;
+                    playVideo('standby', true, false);
+                }, 1000);
+            });
+        }
+
+        function playVideo(videoKey, loop = false, withSound = true, onEnded = null) {
+            if (isTransitioning) return;
+
+            isTransitioning = true;
+            overlay.classList.add('flash');
+
+            setTimeout(() => {
+                video.src = videos[videoKey];
+                video.loop = loop;
+                video.muted = !withSound;
+                video.volume = withSound ? 1.0 : 0;
+
+                if (onEnded) {
+                    video.onended = () => {
+                        video.onended = null;
+                        onEnded();
+                    };
+                } else {
+                    video.onended = null;
+                }
+
+                video.play().then(() => {
+                    if (withSound) {
+                        video.muted = false;
+                    }
+                }).catch(() => { });
+
+                overlay.classList.remove('flash');
+                isTransitioning = false;
+            }, 300);
+        }
+
+        video.addEventListener('loadstart', () => {
+            video.currentTime = 0;
+        });
+    </script>
+</body>
+
+</html>
