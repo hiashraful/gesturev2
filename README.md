@@ -45,11 +45,13 @@ GESTUREV3/
 
 ## 📋 Supported Gestures
 
-1. 👍 **Thumbs Up**
-2. ✌️ **Peace Sign**
-3. 🖕 **Middle Finger**
-4. 🤘 **Heavy Metal**
-5. 🤟 **Our Sign**
+1.  **Thumbs Up**
+2.  **Peace**
+3.  **Middle Finger**
+4.  **Rock On**
+5.  **Heart**
+6.  **Fist Bump**
+6.  **Cuadro**
 
 ## 🛠️ Installation
 
