@@ -22,13 +22,20 @@ current_data = {
     "timestamp": time.time(),
     "status": "starting",
     "detection_triggered": False,
-    "last_trigger_time": 0
+    "last_trigger_time": 0,
+    "person_detected_time": 0,
+    "person_stable": False,
+    "gesture_detected_time": 0,
+    "gesture_stable": False,
+    "last_detected_gesture": "unknown"
 }
 
 MIN_DISTANCE = 0.5
 MAX_DISTANCE = 2.0
 CENTER_THRESHOLD = 0.3
 COOLDOWN_TIME = 10
+PERSON_STABLE_THRESHOLD = 3.0
+GESTURE_STABLE_THRESHOLD = 1.2
 
 mp_hands = mp.solutions.hands
 mp_pose = mp.solutions.pose
@@ -252,7 +259,7 @@ def main():
     hands = mp_hands.Hands(
         static_image_mode=False,
         max_num_hands=2,
-        min_detection_confidence=0.7,
+        min_detection_confidence=0.85,
         min_tracking_confidence=0.5,
         model_complexity=0
     )
@@ -295,21 +302,36 @@ def main():
             img_rgb.flags.writeable = True
             
             person_count = 0
-            gesture = "unknown"
             detection_triggered = False
             
             if pose_result.pose_landmarks:
                 if detect_person(pose_result.pose_landmarks):
+                    current_time = time.time()
+                    
+                    if person_count == 0:
+                        with data_lock:
+                            if current_data["person_detected_time"] == 0:
+                                current_data["person_detected_time"] = current_time
+                    
                     person_count = 1
+                    
+                    with data_lock:
+                        time_detected = current_time - current_data["person_detected_time"]
+                        person_stable = time_detected >= PERSON_STABLE_THRESHOLD
+                        current_data["person_stable"] = person_stable
                     
                     in_range, distance, height_pixels = check_detection_conditions(
                         pose_result.pose_landmarks, frame_width, frame_height
                     )
                     
-                    if in_range and should_trigger_detection():
+                    if in_range and person_stable and should_trigger_detection():
                         detection_triggered = True
                         with data_lock:
                             current_data["last_trigger_time"] = time.time()
+            else:
+                with data_lock:
+                    current_data["person_detected_time"] = 0
+                    current_data["person_stable"] = False
             
             if hand_result.multi_hand_landmarks:
                 for hand_landmarks in hand_result.multi_hand_landmarks:
@@ -317,7 +339,7 @@ def main():
                     pre_processed_landmark_list = pre_process_landmark(landmark_list)
                     hand_sign_id = keypoint_classifier(pre_processed_landmark_list)
                     
-                    if hand_sign_id == 2:
+                    if hand_sign_id == 2 or hand_sign_id == 7:
                         point_history.append(landmark_list[8])
                     else:
                         point_history.append([0, 0])
@@ -330,16 +352,48 @@ def main():
                     finger_gesture_history.append(finger_gesture_id)
                     most_common_fg_id = Counter(finger_gesture_history).most_common()
                     
-                    if hand_sign_id < len(keypoint_classifier_labels):
-                        gesture = keypoint_classifier_labels[hand_sign_id]
-                        break
+                    current_detected_gesture = "unknown"
+                    if hand_sign_id == 7 and len(most_common_fg_id) > 0:
+                        movement_detected = most_common_fg_id[0][0] != 0
+                        if movement_detected:
+                            current_detected_gesture = "waving"
+                        else:
+                            current_detected_gesture = keypoint_classifier_labels[hand_sign_id] if hand_sign_id < len(keypoint_classifier_labels) else "unknown"
+                    elif hand_sign_id < len(keypoint_classifier_labels):
+                        current_detected_gesture = keypoint_classifier_labels[hand_sign_id]
+                    
+                    current_time = time.time()
+                    with data_lock:
+                        if current_detected_gesture != current_data["last_detected_gesture"]:
+                            current_data["last_detected_gesture"] = current_detected_gesture
+                            current_data["gesture_detected_time"] = current_time
+                            current_data["gesture_stable"] = False
+                        else:
+                            time_stable = current_time - current_data["gesture_detected_time"]
+                            if time_stable >= GESTURE_STABLE_THRESHOLD:
+                                current_data["gesture_stable"] = True
+                            else:
+                                current_data["gesture_stable"] = False
+                    
+                    break
             else:
                 point_history.append([0, 0])
+                current_time = time.time()
+                with data_lock:
+                    if current_data["last_detected_gesture"] != "unknown":
+                        current_data["last_detected_gesture"] = "unknown"
+                        current_data["gesture_detected_time"] = current_time
+                        current_data["gesture_stable"] = False
+            
+            stable_gesture = "unknown"
+            with data_lock:
+                if current_data["gesture_stable"]:
+                    stable_gesture = current_data["last_detected_gesture"]
             
             with data_lock:
                 current_data.update({
                     "person_count": person_count,
-                    "gesture": gesture,
+                    "gesture": stable_gesture,
                     "timestamp": time.time(),
                     "status": "running",
                     "detection_triggered": detection_triggered
@@ -348,13 +402,16 @@ def main():
             if show_video:
                 display_img = debug_img.copy()
                 
-                status_color = (0, 255, 0) if person_count > 0 else (0, 0, 255)
-                # cv2.putText(display_img, f"Person: {person_count}", (10, 30), 
-                #            cv2.FONT_HERSHEY_SIMPLEX, 1, status_color, 2)
-                # cv2.putText(display_img, f"Gesture: {gesture}", (10, 70), 
-                #            cv2.FONT_HERSHEY_SIMPLEX, 1, (255, 255, 0), 2)
-                # cv2.putText(display_img, f"Clients: {len(connected_clients)}", (10, 110), 
-                #            cv2.FONT_HERSHEY_SIMPLEX, 1, (255, 0, 255), 2)
+                with data_lock:
+                    real_time_gesture = current_data["last_detected_gesture"]
+                    is_stable = current_data["gesture_stable"]
+                    stability_text = "STABLE" if is_stable else "DETECTING..."
+                    stability_color = (0, 255, 0) if is_stable else (0, 255, 255)
+                
+                cv2.putText(display_img, f"Gesture: {real_time_gesture}", (10, 50), 
+                           cv2.FONT_HERSHEY_SIMPLEX, 1.2, (0, 255, 255), 3)
+                cv2.putText(display_img, stability_text, (10, 100), 
+                           cv2.FONT_HERSHEY_SIMPLEX, 0.8, stability_color, 2)
                 
                 if hand_result.multi_hand_landmarks:
                     for hand_landmarks in hand_result.multi_hand_landmarks:
